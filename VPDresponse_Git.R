@@ -19,53 +19,32 @@ VPD_climate <- lapply(species.run, function(sp){
   sites.run.sp <- unique(tmp.data.sp$uid_site)
   
   # Site-level
+  
   Ret <- lapply(sites.run.sp, function(si){
     tmp.data.si <- tmp.data.sp[uid_site == si,][,uid_tree := factor(uid_tree)]
     
-    # Sites statistics
     tmp.site <- tmp.data.si[, list(Length.tree = .N, Year_from = min(Year), Year_to = max(Year), age_tree = max(Age)), 
                             by = .(species, uid_site, uid_tree)][, Ntrees := .N, by = .(species, uid_site)]
     
-    # initialize checks for models run
     model.sel <- 0
     stopp.rc <- 0
     
-    # First detrend tree-ring series, removing the age effect
-    detrend <- tryCatch(
+    result <- tryCatch(
       {
         if (unique(tmp.site$Ntrees) > 1)
-          model.detrend.tree_UID <- gamm(LBai.05 ~ log(BA.t_1) + s(Age, bs='cr'),
-                                       random = list(uid_tree=~1),
-                                       correlation = corCAR1(value = 0.5, form = ~ Year | uid_tree), 
-                                       method = 'REML', data = tmp.data.si)
+          model.vpd.tree_UID <- gamm(LBai.05 ~ log(BA.t_1) + s(Age, bs='cr') + VPDyear + VPDyear_1,
+                                     random = list(uid_tree=~1),
+                                     correlation = corCAR1(value = 0.5, form = ~ Year | uid_tree), 
+                                     method = 'REML', data = tmp.data.si)
         
         else 
-          model.detrend.tree_UID <- gamm(LBai.05 ~ log(BA.t_1) + s(Age, bs='cr') + 
-                                           SMIyear, data = tmp.data.si)
+          model.vpd.tree_UID <- gamm(LBai.05 ~ log(BA.t_1) + s(Age, bs='cr') + VPDyear + VPDyear_1, 
+                                     data = tmp.data.si)
       },
       
       error = function(e) e
     )
-  
-  tmp.data.si$Resid_Lbai_SMI <- residuals(detrend$lme)
-  
-  # Fit the GAMM growth-VPD models on the detrended data
-  result <- tryCatch(
-    {
-      if (unique(tmp.site$Ntrees) > 1)
-        model.vpd.tree_UID <- gamm(Resid_Lbai_SMI ~ VPDyear + VPDyear_1,
-                                     random = list(uid_tree=~1),
-                                     method = 'REML', data = tmp.data.si)
-      
-      else 
-        model.vpd.tree_UID <- gamm(Resid_Lbai_SMI ~ VPDyear + VPDyear_1 + s(Age, bs='cr'), 
-                                     control = lmeControl(opt = "optim"), data = tmp.data.si)
-    },
     
-    error = function(e) e
-  )
-  
-
     if (!is.null(result$message)) stopp.rc <- 1 else {
       if (summary(model.vpd.tree_UID$gam)$r.sq < 0) stopp.rc <- 1}
     
@@ -79,8 +58,6 @@ VPD_climate <- lapply(species.run, function(sp){
     
     rm(stopp.rc)
     
-    # When convergent, store all models details: 
-    #predicted values, normal, pearson and normalized residuals, MSE, baskerville estimates
     if (model.sel > 0){
       
       tmp.data.si$pred.Lbai.05.SMI = predict(mi10$lme)
@@ -92,11 +69,11 @@ VPD_climate <- lapply(species.run, function(sp){
       tmp.data.si$CF = exp(mse/2)
       
       tmp.data.si[,pred.Bai.bv := CF*exp(pred.Lbai.05.SMI) - 0.05]
-      tmp.data.si[,res.Bai.bv := Bai-pred.Bai.bv]
+      tmp.data.si[,res.Bai.bv := Bai-pred.Bai.bv]#baskerville estimates
       
-      tmp.data.si[, ratio := Bai / pred.Bai.bv]
+      #define the ratio estimate/observation
       
-      # Store models parameters, summerize in a common table
+      tmp.data.si[,ratio := Bai /  pred.Bai.bv]
       ptable <- data.table(Parameter = row.names(summary(mi10$gam)$p.table), summary(mi10$gam)$p.table)
       ptable$uid_site <- si
       ptable.all <- rbind(ptable.all, ptable)
